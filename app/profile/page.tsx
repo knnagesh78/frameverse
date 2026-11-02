@@ -1,10 +1,10 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { updateProfile as updateAuthProfile } from "firebase/auth";
 import { collection, doc, getDoc, limit, onSnapshot, orderBy, query, serverTimestamp, where, writeBatch } from "firebase/firestore";
-import { ArrowUpRight, Camera, Eye, Heart, LoaderCircle, MapPin, MessageCircle, Pencil, Save, UserRound } from "lucide-react";
+import { ArrowUpRight, Camera, Check, Eye, Heart, ImagePlus, LoaderCircle, MapPin, MessageCircle, Pencil, Save, Trash2, UserRound } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { AuthGuard } from "@/components/auth-guard";
 import { PhotoCard, type PhotoInteractionStats, type PhotoPost } from "@/components/photo-card";
@@ -28,6 +28,37 @@ const suggestedUsername = (name: string, email: string | null, uid: string) => {
   return `${base}_${uid.slice(0, 5).toLowerCase()}`.slice(0, 24);
 };
 
+async function compressProfilePhoto(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const side = Math.min(bitmap.width, bitmap.height);
+    const left = (bitmap.width - side) / 2;
+    const top = (bitmap.height - side) / 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Profile photo editing isn't available in this browser.");
+    context.drawImage(bitmap, left, top, side, side, 0, 0, canvas.width, canvas.height);
+
+    let compressed: Blob | null = null;
+    for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+      compressed = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/webp", quality));
+      if (compressed?.type === "image/webp" && compressed.size <= 100 * 1024) break;
+    }
+    if (!compressed || compressed.type !== "image/webp" || compressed.size > 100 * 1024) {
+      throw new Error("This profile photo is too large after compression. Choose another image and try again.");
+    }
+
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("The profile photo couldn't be prepared."));
+      reader.onerror = () => reject(new Error("The profile photo couldn't be prepared."));
+      reader.readAsDataURL(compressed);
+    });
+  } finally { bitmap.close(); }
+}
+
 function ProfileDashboard() {
   const { user } = useAuth();
   const [profile, setProfile] = useState<ProfileDraft | null>(null);
@@ -38,6 +69,7 @@ function ProfileDashboard() {
   const [profileLoading, setProfileLoading] = useState(true);
   const [photosLoading, setPhotosLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
   const [photos, setPhotos] = useState<PhotoPost[]>([]);
   const [photoStats, setPhotoStats] = useState<Record<string, PhotoInteractionStats>>({});
   const [error, setError] = useState("");
@@ -119,6 +151,22 @@ function ProfileDashboard() {
 
   function updateProfile<K extends keyof ProfileDraft>(key: K, value: ProfileDraft[K]) {
     setProfile(current => current ? { ...current, [key]: value } : current);
+  }
+
+  async function chooseProfilePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !profile) return;
+    setError("");
+    if (!file.type.startsWith("image/")) { setError("Choose an image file for your profile photo."); return; }
+    if (file.size > 10 * 1024 * 1024) { setError("Choose a profile photo smaller than 10 MB."); return; }
+    setAvatarBusy(true);
+    try {
+      updateProfile("photoURL", await compressProfilePhoto(file));
+      setNotice("Profile photo ready. Save your profile to publish it.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The profile photo couldn't be prepared.");
+    } finally { setAvatarBusy(false); }
   }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
@@ -220,8 +268,12 @@ function ProfileDashboard() {
           </section>
 
           {editing && <form onSubmit={saveProfile} className="mt-5 rounded-3xl border border-white/[.08] bg-panel p-5 sm:p-7">
-            <div><h2 className="text-lg font-medium">Profile details</h2><p className="mt-1 text-sm text-muted">Your name, username, bio, location, and interests appear on your public profile.</p></div>
+            <div><h2 className="text-lg font-medium">Profile details</h2><p className="mt-1 text-sm text-muted">Your name, username, bio, location, interests, and profile photo appear on your public profile.</p></div>
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <div className="flex items-center gap-4 rounded-2xl border border-white/[.08] bg-white/[.02] p-4 sm:col-span-2">
+                {profile.photoURL ? <img src={profile.photoURL} alt="Profile photo preview" className="size-16 shrink-0 rounded-2xl border border-white/10 object-cover" /> : <span className="grid size-16 shrink-0 place-items-center rounded-2xl border border-white/10 bg-accent/10 text-xl font-semibold text-accent">{initials}</span>}
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><label className={`inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-white/10 px-3 text-sm text-white/75 hover:border-accent/30 hover:text-accent ${avatarBusy ? "pointer-events-none opacity-50" : ""}`}><ImagePlus size={15} />{avatarBusy ? "Preparing…" : profile.photoURL ? "Change photo" : "Add profile photo"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseProfilePhoto} disabled={avatarBusy} className="sr-only" /></label>{profile.photoURL && <button type="button" onClick={() => { updateProfile("photoURL", ""); setNotice("Profile photo removed. Save your profile to publish the change."); }} disabled={avatarBusy} className="inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm text-white/45 hover:text-white disabled:opacity-50"><Trash2 size={14} />Remove</button>}</div><p className="mt-2 text-xs leading-5 text-white/40">Square-cropped and compressed before saving. Your profile photo is public.</p></div>
+              </div>
               <label className="text-sm text-white/70">Display name<input required maxLength={80} autoComplete="name" value={profile.displayName} onChange={event => updateProfile("displayName", event.target.value)} className="field mt-2" placeholder="Your name" /></label>
               <label className="text-sm text-white/70">Username<span className="relative mt-2 block"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/35">@</span><input required minLength={3} maxLength={24} autoComplete="username" value={profile.username} onChange={event => updateProfile("username", event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))} className="field pl-9" placeholder="yourname" /></span></label>
               <label className="text-sm text-white/70">City<input maxLength={80} autoComplete="address-level2" value={profile.city} onChange={event => updateProfile("city", event.target.value)} className="field mt-2" placeholder="Your city" /></label>
@@ -230,7 +282,7 @@ function ProfileDashboard() {
               <label className="text-sm text-white/70">I am a<select value={profile.role} onChange={event => updateProfile("role", event.target.value as ProfileDraft["role"])} className="field mt-2"><option value="photographer">Photographer</option><option value="viewer">Photo enthusiast</option></select></label>
               <label className="text-sm text-white/70">Photography interests<input value={interestText} onChange={event => setInterestText(event.target.value)} className="field mt-2" placeholder="Nature, street, portraits" /><span className="mt-1 block text-xs text-white/35">Separate interests with commas; up to 10.</span></label>
             </div>
-            <div className="mt-5 flex flex-wrap justify-end gap-2"><button type="button" onClick={() => { setEditing(false); setError(""); }} className="h-11 rounded-xl border border-white/10 px-4 text-sm text-white/70">Cancel</button><button disabled={saving} className="primary-button h-11 px-5">{saving ? <LoaderCircle size={16} className="animate-spin" /> : profileReady ? <Save size={16} /> : <Check size={16} />}{saving ? "Saving…" : profileReady ? "Save changes" : "Create profile"}</button></div>
+            <div className="mt-5 flex flex-wrap justify-end gap-2"><button type="button" disabled={saving || avatarBusy} onClick={() => { setEditing(false); setError(""); }} className="h-11 rounded-xl border border-white/10 px-4 text-sm text-white/70 disabled:opacity-50">Cancel</button><button disabled={saving || avatarBusy} className="primary-button h-11 px-5">{saving ? <LoaderCircle size={16} className="animate-spin" /> : profileReady ? <Save size={16} /> : <Check size={16} />}{saving ? "Saving…" : profileReady ? "Save changes" : "Create profile"}</button></div>
           </form>}
 
           <section className="mt-8">
