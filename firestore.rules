@@ -119,7 +119,10 @@ service cloud.firestore {
     }
 
     match /photos/{photoId} {
-      allow read: if resource.data.visibility == 'public' || owns(resource.data.ownerId);
+      // Public queries (including guest Explore) may list only public photos.
+      // Keep private owner access for direct document reads.
+      allow list: if resource.data.visibility == 'public';
+      allow get: if resource.data.visibility == 'public' || owns(resource.data.ownerId);
       allow create: if validInlinePhoto();
       allow update: if owns(resource.data.ownerId)
         && request.resource.data.ownerId == resource.data.ownerId
