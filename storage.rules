@@ -1,0 +1,11 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Existing public image URLs remain readable. New photo images are stored
+    // inline in their Firestore photo documents instead of Firebase Storage.
+    match /{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

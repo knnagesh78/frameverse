@@ -1,0 +1,217 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function owns(uid) { return signedIn() && request.auth.uid == uid; }
+    function canViewPhoto(photoId) {
+      return get(/databases/$(database)/documents/photos/$(photoId)).data.visibility == 'public'
+        || owns(get(/databases/$(database)/documents/photos/$(photoId)).data.ownerId);
+    }
+    function validInlinePhoto() {
+      return request.resource.data.keys().hasOnly([
+          'ownerId', 'username', 'authorName', 'image', 'title', 'caption',
+          'category', 'city', 'country', 'allowComments', 'visibility', 'createdAt'
+        ])
+        && signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.username is string
+        && request.resource.data.username.size() <= 30
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() <= 80
+        && request.resource.data.image is map
+        && request.resource.data.image.keys().hasOnly(['data', 'contentType', 'width', 'height'])
+        && request.resource.data.image.contentType == 'image/webp'
+        && request.resource.data.image.data is string
+        && request.resource.data.image.data.size() <= 900000
+        && request.resource.data.image.data.matches('data:image/webp;base64,[A-Za-z0-9+/]+={0,2}')
+        && request.resource.data.image.width is int
+        && request.resource.data.image.width > 0
+        && request.resource.data.image.width <= 1600
+        && request.resource.data.image.height is int
+        && request.resource.data.image.height > 0
+        && request.resource.data.image.height <= 1600
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 140
+        && request.resource.data.caption is string
+        && request.resource.data.caption.size() <= 1500
+        && request.resource.data.category in ['Nature', 'Portraits', 'Travel', 'Street', 'Wildlife', 'Weddings', 'Architecture', 'Fashion', 'Food', 'Events', 'Creative']
+        && request.resource.data.city is string
+        && request.resource.data.city.size() <= 80
+        && request.resource.data.country is string
+        && request.resource.data.country.size() <= 80
+        && request.resource.data.allowComments is bool
+        && request.resource.data.visibility == 'public'
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    match /users/{uid} {
+      allow read: if owns(uid);
+      allow create: if owns(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role in ['viewer', 'photographer'];
+      allow update: if owns(uid)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role in ['viewer', 'photographer']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'username', 'country', 'city', 'bio', 'role', 'interests', 'photoURL', 'updatedAt']);
+      allow delete: if owns(uid);
+
+      match /notifications/{notificationId} {
+        allow read: if owns(uid);
+        allow create: if signedIn()
+          && request.auth.uid != uid
+          && request.resource.data.recipientId == uid
+          && request.resource.data.actorId == request.auth.uid
+          && request.resource.data.read == false
+          && ((request.resource.data.type == 'photo_like'
+                && exists(/databases/$(database)/documents/photos/$(request.resource.data.photoId)/likes/$(request.auth.uid))
+                && get(/databases/$(database)/documents/photos/$(request.resource.data.photoId)/likes/$(request.auth.uid)).data.userId == request.auth.uid
+                && get(/databases/$(database)/documents/photos/$(request.resource.data.photoId)).data.ownerId == uid)
+            || (request.resource.data.type == 'photo_comment'
+                && exists(/databases/$(database)/documents/photos/$(request.resource.data.photoId)/comments/$(request.resource.data.commentId))
+                && get(/databases/$(database)/documents/photos/$(request.resource.data.photoId)/comments/$(request.resource.data.commentId)).data.userId == request.auth.uid
+                && get(/databases/$(database)/documents/photos/$(request.resource.data.photoId)).data.ownerId == uid)
+            || (request.resource.data.type == 'new_follower'
+                && exists(/databases/$(database)/documents/follows/$(request.auth.uid + '_' + uid)))
+            || (request.resource.data.type == 'new_message'
+                && exists(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)/messages/$(request.resource.data.messageId))
+                && request.auth.uid in get(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)).data.participants
+                && uid in get(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)).data.participants
+                && get(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)/messages/$(request.resource.data.messageId)).data.senderId == request.auth.uid));
+        allow update: if owns(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+          && request.resource.data.read is bool;
+        allow delete: if owns(uid);
+      }
+    }
+
+    match /photographerProfiles/{uid} {
+      allow read: if true;
+      allow create: if owns(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.keys().hasOnly(['uid', 'displayName', 'username', 'country', 'city', 'bio', 'role', 'interests', 'photoURL', 'updatedAt'])
+        && request.resource.data.role in ['viewer', 'photographer']
+        && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.uid == uid;
+      allow update: if owns(uid)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.keys().hasOnly(['uid', 'displayName', 'username', 'country', 'city', 'bio', 'role', 'interests', 'photoURL', 'updatedAt'])
+        && request.resource.data.role in ['viewer', 'photographer']
+        && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.uid == uid;
+      allow delete: if owns(uid);
+    }
+
+    match /usernames/{username} {
+      allow read: if true;
+      allow create: if owns(request.auth.uid)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.username == username
+        && request.resource.data.keys().hasOnly(['uid', 'username', 'updatedAt'])
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == username;
+      allow update: if owns(request.auth.uid) && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.username == username
+        && request.resource.data.keys().hasOnly(['uid', 'username', 'updatedAt'])
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == username;
+      allow delete: if owns(request.auth.uid) && resource.data.uid == request.auth.uid;
+    }
+
+    match /photos/{photoId} {
+      allow read: if resource.data.visibility == 'public' || owns(resource.data.ownerId);
+      allow create: if validInlinePhoto();
+      allow update: if owns(resource.data.ownerId)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'caption', 'category', 'city', 'country', 'allowComments', 'visibility'])
+        && request.resource.data.visibility in ['public', 'private'];
+      allow delete: if owns(resource.data.ownerId);
+
+      match /likes/{userId} {
+        allow read: if canViewPhoto(photoId);
+        allow create: if canViewPhoto(photoId) && owns(userId) && request.resource.data.userId == userId;
+        allow update: if false;
+        allow delete: if owns(userId);
+      }
+      match /ratings/{userId} {
+        allow read: if canViewPhoto(photoId);
+        allow create, update: if canViewPhoto(photoId) && owns(userId) && request.resource.data.userId == userId && request.resource.data.value is int && request.resource.data.value >= 1 && request.resource.data.value <= 5;
+        allow delete: if owns(userId);
+      }
+      match /views/{userId} {
+        allow read: if canViewPhoto(photoId);
+        allow create: if canViewPhoto(photoId) && owns(userId) && request.resource.data.viewerId == userId;
+        allow update, delete: if false;
+      }
+      match /comments/{commentId} {
+        allow read: if canViewPhoto(photoId);
+        allow create: if owns(request.auth.uid)
+          && canViewPhoto(photoId)
+          && get(/databases/$(database)/documents/photos/$(photoId)).data.allowComments == true
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.body is string
+          && request.resource.data.body.size() > 0
+          && request.resource.data.body.size() <= 1000;
+        allow update: if owns(resource.data.userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body'])
+          && request.resource.data.body is string && request.resource.data.body.size() <= 1000;
+        allow delete: if owns(resource.data.userId) || owns(get(/databases/$(database)/documents/photos/$(photoId)).data.ownerId);
+      }
+    }
+
+    match /savedPhotos/{saveId} {
+      allow read, delete: if owns(resource.data.userId);
+      allow create: if owns(request.auth.uid)
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.photoId is string
+        && exists(/databases/$(database)/documents/photos/$(request.resource.data.photoId));
+      allow update: if false;
+    }
+
+    match /follows/{followId} {
+      allow read: if true;
+      allow create: if owns(request.auth.uid)
+        && request.resource.data.followerId == request.auth.uid
+        && request.resource.data.followingId is string
+        && request.resource.data.followingId != request.auth.uid
+        && followId == request.auth.uid + '_' + request.resource.data.followingId;
+      allow update: if false;
+      allow delete: if owns(resource.data.followerId);
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.participants;
+      allow create: if signedIn()
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() == 2
+        && request.resource.data.participants[0] != request.resource.data.participants[1]
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.participants
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessageText', 'lastMessageId', 'updatedAt'])
+        && request.resource.data.lastMessageText is string
+        && request.resource.data.lastMessageText.size() <= 180
+        && request.resource.data.lastMessageId is string
+        && existsAfter(/databases/$(database)/documents/conversations/$(conversationId)/messages/$(request.resource.data.lastMessageId))
+        && getAfter(/databases/$(database)/documents/conversations/$(conversationId)/messages/$(request.resource.data.lastMessageId)).data.senderId == request.auth.uid;
+      allow delete: if signedIn() && request.auth.uid in resource.data.participants;
+
+      match /messages/{messageId} {
+        allow read: if signedIn() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 3000;
+        allow update, delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
