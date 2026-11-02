@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Aperture, ArrowUpRight, Camera, Globe2, Sparkles } from "lucide-react";
+import { PwaInstallButton } from "@/components/pwa-install-button";
 
 export function Brand() {
   return (
@@ -16,7 +17,7 @@ export function AuthFrame({ children, eyebrow = "A home for every frame" }: { ch
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_74%_12%,rgba(184,255,103,.09),transparent_34%),radial-gradient(ellipse_at_15%_86%,rgba(119,95,255,.08),transparent_35%)]" />
       <div className="relative mx-auto grid min-h-screen max-w-[1440px] lg:grid-cols-[1fr_1fr]">
         <section className="flex flex-col px-6 py-7 sm:px-10 lg:px-16 lg:py-10">
-          <Brand />
+          <div className="flex items-center justify-between"><Brand /><PwaInstallButton /></div>
           <div className="my-auto w-full max-w-[450px] py-12 lg:py-20">{children}</div>
           <div className="flex items-center gap-2 text-xs text-white/35"><Globe2 size={14} /> A global community for photography</div>
         </section>

@@ -1,8 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { addDoc, collection, deleteDoc, doc, getDoc, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getCountFromServer, getDoc, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Bookmark, Heart, MessageCircle, MoreHorizontal, Share2, Star } from "lucide-react";
 import { firestore } from "@/lib/firebase";
 import { notifyUser } from "@/lib/notifications";
@@ -13,30 +13,41 @@ export type PhotoPost = {
   image?: { data: string; contentType?: string; width?: number; height?: number }; imageUrl?: string;
   title?: string; caption?: string; category?: string; city?: string; country?: string; allowComments?: boolean;
 };
+export type PhotoInteractionStats = { likes: number; views: number; comments: number };
 type CommentItem = { id: string; authorName?: string; username?: string; body: string };
 
-export function PhotoCard({ photo }: { photo: PhotoPost }) {
+export function PhotoCard({ photo, onStatsChange }: { photo: PhotoPost; onStatsChange?: (photoId: string, stats: PhotoInteractionStats) => void }) {
   const { user } = useAuth();
   const canInteract = Boolean(user);
   const [liked, setLiked] = useState(false); const [saved, setSaved] = useState(false); const [myRating, setMyRating] = useState(0);
-  const [likeCount, setLikeCount] = useState(0); const [ratingCount, setRatingCount] = useState(0); const [ratingAverage, setRatingAverage] = useState(0); const [viewCount, setViewCount] = useState(0);
+  const [likeCount, setLikeCount] = useState(0); const [ratingCount, setRatingCount] = useState(0); const [ratingAverage, setRatingAverage] = useState(0); const [viewCount, setViewCount] = useState(0); const [commentCount, setCommentCount] = useState(0);
   const [commentsOpen, setCommentsOpen] = useState(false); const [comments, setComments] = useState<CommentItem[]>([]); const [comment, setComment] = useState("");
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const cardRef = useRef<HTMLElement>(null);
+  const statsRef = useRef<PhotoInteractionStats>({ likes: 0, views: 0, comments: 0 });
+  const reportCount = useCallback((key: keyof PhotoInteractionStats, value: number) => {
+    statsRef.current = { ...statsRef.current, [key]: value };
+    onStatsChange?.(photo.id, statsRef.current);
+  }, [onStatsChange, photo.id]);
 
   useEffect(() => {
     if (!firestore) return;
     const handleListenerError = () => setError("Some photo details couldn't load. Check Firestore access and try again.");
-    const unsubLikes = onSnapshot(collection(firestore, "photos", photo.id, "likes"), snap => setLikeCount(snap.size), handleListenerError);
+    statsRef.current = { likes: 0, views: 0, comments: 0 };
+    const unsubLikes = onSnapshot(collection(firestore, "photos", photo.id, "likes"), snap => { setLikeCount(snap.size); reportCount("likes", snap.size); }, handleListenerError);
     const unsubRatings = onSnapshot(collection(firestore, "photos", photo.id, "ratings"), snap => { setRatingCount(snap.size); setRatingAverage(snap.size ? snap.docs.reduce((total, item) => total + Number(item.data().value || 0), 0) / snap.size : 0); }, handleListenerError);
-    const unsubViews = onSnapshot(collection(firestore, "photos", photo.id, "views"), snap => setViewCount(snap.size), handleListenerError);
-    if (!user) return () => { unsubLikes(); unsubRatings(); unsubViews(); };
+    const unsubViews = onSnapshot(collection(firestore, "photos", photo.id, "views"), snap => { setViewCount(snap.size); reportCount("views", snap.size); }, handleListenerError);
+    let active = true;
+    if (onStatsChange) void getCountFromServer(collection(firestore, "photos", photo.id, "comments")).then(snap => {
+      if (active) { setCommentCount(snap.data().count); reportCount("comments", snap.data().count); }
+    }).catch(handleListenerError);
+    if (!user) return () => { active = false; unsubLikes(); unsubRatings(); unsubViews(); };
     const unsubLike = onSnapshot(doc(firestore, "photos", photo.id, "likes", user.uid), snap => setLiked(snap.exists()), handleListenerError);
     const savedPhotoQuery = query(collection(firestore, "savedPhotos"), where("userId", "==", user.uid), where("photoId", "==", photo.id), limit(1));
     const unsubSave = onSnapshot(savedPhotoQuery, snap => setSaved(!snap.empty), handleListenerError);
     const unsubRating = onSnapshot(doc(firestore, "photos", photo.id, "ratings", user.uid), snap => setMyRating((snap.data()?.value as number) || 0), handleListenerError);
-    return () => { unsubLikes(); unsubRatings(); unsubViews(); unsubLike(); unsubSave(); unsubRating(); };
-  }, [photo.id, user]);
+    return () => { active = false; unsubLikes(); unsubRatings(); unsubViews(); unsubLike(); unsubSave(); unsubRating(); };
+  }, [photo.id, user, onStatsChange, reportCount]);
 
   useEffect(() => {
     const database = firestore;
@@ -58,9 +69,15 @@ export function PhotoCard({ photo }: { photo: PhotoPost }) {
   }, [photo.id, user]);
 
   useEffect(() => {
-    if (!commentsOpen || !firestore) return;
-    return onSnapshot(query(collection(firestore, "photos", photo.id, "comments"), orderBy("createdAt", "desc"), limit(40)), snap => setComments(snap.docs.map(item => ({ id: item.id, ...item.data() } as CommentItem))), () => setError("Comments couldn't load. Check Firestore access and try again."));
-  }, [commentsOpen, photo.id]);
+    const database = firestore;
+    if (!commentsOpen || !database) return;
+    return onSnapshot(query(collection(database, "photos", photo.id, "comments"), orderBy("createdAt", "desc"), limit(40)), snap => {
+      setComments(snap.docs.map(item => ({ id: item.id, ...item.data() } as CommentItem)));
+      if (onStatsChange) void getCountFromServer(collection(database, "photos", photo.id, "comments")).then(count => {
+        setCommentCount(count.data().count); reportCount("comments", count.data().count);
+      }).catch(() => setError("Comments couldn't load. Check Firestore access and try again."));
+    }, () => setError("Comments couldn't load. Check Firestore access and try again."));
+  }, [commentsOpen, photo.id, onStatsChange, reportCount]);
 
   async function toggleLike() {
     if (!canInteract || !user) return;
@@ -120,7 +137,7 @@ export function PhotoCard({ photo }: { photo: PhotoPost }) {
         <div className="max-w-[80%]"><p className="text-2xl font-medium tracking-tight text-white">{photo.title || "Untitled frame"}</p>{photo.caption && <p className="mt-2 line-clamp-3 text-sm leading-6 text-white/75">{photo.caption}</p>} {(photo.city || photo.country) && <p className="mt-3 text-xs text-white/60">{[photo.city, photo.country].filter(Boolean).join(", ")}</p>}</div>
         <div className="flex shrink-0 flex-col items-center gap-4">
           <button disabled={!canInteract} onClick={toggleLike} title={canInteract ? "Like photo" : "Sign in to like photos"} className={`flex flex-col items-center gap-1 text-xs ${liked ? "text-rose-400" : "text-white"} disabled:cursor-not-allowed disabled:opacity-55`} aria-label={liked ? "Unlike photo" : "Like photo"}><Heart size={23} fill={liked ? "currentColor" : "none"} />{likeCount}</button>
-          <button onClick={() => setCommentsOpen(value => !value)} className="flex flex-col items-center gap-1 text-xs text-white" aria-label="Open comments"><MessageCircle size={22} />{comments.length || "Comment"}</button>
+          <button onClick={() => setCommentsOpen(value => !value)} className="flex flex-col items-center gap-1 text-xs text-white" aria-label="Open comments"><MessageCircle size={22} />{commentCount || comments.length || "Comment"}</button>
           <button disabled={!canInteract} onClick={toggleSave} title={canInteract ? "Save photo" : "Sign in to save photos"} className={`text-white disabled:cursor-not-allowed disabled:opacity-55 ${saved ? "text-accent" : ""}`} aria-label={saved ? "Remove saved photo" : "Save photo"}><Bookmark size={21} fill={saved ? "currentColor" : "none"} /></button>
           <button onClick={share} className="text-white" aria-label="Share photo"><Share2 size={20} /></button>
         </div>

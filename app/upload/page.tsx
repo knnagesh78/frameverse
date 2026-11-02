@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { collection, doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { Aperture, Check, LoaderCircle, UploadCloud } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { AuthGuard } from "@/components/auth-guard";
@@ -46,11 +46,28 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 
 function UploadForm() {
   const { user } = useAuth();
-  const [name, setName] = useState(""); const [file, setFile] = useState<File | null>(null); const [preview, setPreview] = useState("");
+  const [name, setName] = useState(""); const [username, setUsername] = useState(""); const [profileLoaded, setProfileLoaded] = useState(false); const [file, setFile] = useState<File | null>(null); const [preview, setPreview] = useState("");
   const [title, setTitle] = useState(""); const [caption, setCaption] = useState(""); const [category, setCategory] = useState(categories[0]); const [city, setCity] = useState(""); const [country, setCountry] = useState("");
   const [busy, setBusy] = useState(false); const [stage, setStage] = useState(""); const [error, setError] = useState(""); const [publishedId, setPublishedId] = useState("");
 
   useEffect(() => { if (user?.displayName) setName(user.displayName); }, [user]);
+  useEffect(() => {
+    if (!user || !firestore) { setProfileLoaded(true); return; }
+    let active = true;
+    setProfileLoaded(false);
+    void getDoc(doc(firestore, "photographerProfiles", user.uid)).then(snapshot => {
+      if (!active) return;
+      if (snapshot.exists()) {
+        const profile = snapshot.data();
+        if (profile.username) setUsername(String(profile.username));
+        if (profile.displayName) setName(String(profile.displayName));
+        if (profile.city) setCity(String(profile.city));
+        if (profile.country) setCountry(String(profile.country));
+      }
+      setProfileLoaded(true);
+    }).catch(() => { if (active) setProfileLoaded(true); });
+    return () => { active = false; };
+  }, [user?.uid]);
   useEffect(() => { if (!file) { setPreview(""); return; } const url = URL.createObjectURL(file); setPreview(url); return () => URL.revokeObjectURL(url); }, [file]);
 
   function acceptFile(selected: File | undefined) {
@@ -75,7 +92,7 @@ function UploadForm() {
       const imageData = await blobToDataUrl(prepared.blob);
       setStage("Saving the photo to FrameVerse…");
       await setDoc(photoRef, {
-        ownerId: user.uid, username: "", authorName: name.trim(),
+        ownerId: user.uid, username, authorName: name.trim(),
         image: { data: imageData, contentType: prepared.blob.type, width: prepared.width, height: prepared.height },
         title: title.trim(), caption: caption.trim(), category, city: city.trim(), country: country.trim(),
         allowComments: true, visibility: "public", createdAt: serverTimestamp(),
@@ -92,7 +109,7 @@ function UploadForm() {
   if (publishedId) return <AppShell title="Your photo is live"><div className="mx-auto max-w-2xl rounded-3xl border border-white/[.08] bg-panel px-6 py-14 text-center sm:px-12"><span className="mx-auto grid size-14 place-items-center rounded-2xl bg-accent text-ink"><Check size={25} /></span><p className="mt-6 text-xs font-medium uppercase tracking-[.2em] text-accent">Published publicly</p><h1 className="mt-2 text-3xl font-medium tracking-[-.04em]">Your photo is in the feed.</h1><p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted">Your compressed image and photo details are saved together in Firestore. Everyone can view your public photo.</p><div className="mt-7 flex flex-wrap justify-center gap-3"><Link href={`/photo/${publishedId}`} className="primary-button px-5">View photo</Link><Link href="/" className="inline-flex min-h-12 items-center rounded-xl border border-white/10 px-5 text-sm text-white/75 hover:bg-white/[.04]">Open feed</Link></div></div></AppShell>;
 
   return <AppShell title="Share a frame with the community"><div className="mx-auto max-w-3xl">
-    <p className="text-xs font-medium uppercase tracking-[.2em] text-accent">Photo studio</p><h1 className="mt-2 text-3xl font-medium tracking-[-.04em]">Publish a photograph</h1><p className="mt-3 text-sm leading-6 text-muted">Your photo is re-encoded to remove embedded metadata and stored with its details as JSON in Firestore. It is public to everyone. Images are resized and compressed to fit Firestore’s document limit.</p>
+    <p className="text-xs font-medium uppercase tracking-[.2em] text-accent">Photo studio</p><h1 className="mt-2 text-3xl font-medium tracking-[-.04em]">Publish a photograph</h1><p className="mt-3 text-sm leading-6 text-muted">Your photo is re-encoded to remove embedded metadata and stored with its details as JSON in Firestore. It is public to everyone. Images are resized and compressed to fit Firestore’s document limit.</p>{profileLoaded && !username && <p className="mt-4 rounded-xl border border-accent/15 bg-accent/[.05] px-4 py-3 text-sm text-white/65">Create your profile first to link this photo to your public profile. <Link href="/profile" className="font-medium text-accent hover:text-white">Set up profile →</Link></p>}
     <form onSubmit={publish} className="mt-7 grid gap-6 rounded-3xl border border-white/[.08] bg-panel p-5 sm:p-8">
       <label onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }} className="group relative grid min-h-64 cursor-pointer place-items-center overflow-hidden rounded-2xl border border-dashed border-white/15 bg-black/20 text-center hover:border-accent/45">{preview ? <><img src={preview} alt="Selected photo preview" className="absolute inset-0 size-full object-contain" /><span className="absolute bottom-3 rounded-full bg-black/70 px-4 py-2 text-xs text-white">Choose a different photo</span></> : <span className="px-5"><span className="mx-auto grid size-12 place-items-center rounded-2xl border border-accent/20 bg-accent/[.08] text-accent"><UploadCloud size={22} /></span><span className="mt-4 block text-sm font-medium">Drop a photo here or browse</span><span className="mt-2 block text-xs text-white/40">JPG, PNG, or WebP · original up to 15 MB</span></span>}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} className="absolute inset-0 cursor-pointer opacity-0" aria-label="Choose a photo" /></label>
       <p className="-mt-3 text-xs leading-5 text-white/35">The stored WebP image is kept below 650 KB so the photo document stays below Firestore’s 1 MiB limit. Large originals are resized and compressed automatically.</p>
