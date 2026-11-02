@@ -15,12 +15,13 @@ function SavedPhotos() {
   const [photos, setPhotos] = useState<PhotoPost[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!firestore || !user) { setLoading(false); return; }
+    const database = firestore;
+    if (!database || !user) { setLoading(false); return; }
     let active = true;
-    const stop = onSnapshot(query(collection(firestore, "savedPhotos"), where("userId", "==", user.uid), orderBy("createdAt", "desc"), limit(40)), async snapshot => {
+    const stop = onSnapshot(query(collection(database, "savedPhotos"), where("userId", "==", user.uid), orderBy("createdAt", "desc"), limit(40)), async snapshot => {
       try {
         const saved = await Promise.all(snapshot.docs.map(async item => {
-          const photoSnapshot = await getDoc(doc(firestore, "photos", item.data().photoId as string));
+          const photoSnapshot = await getDoc(doc(database, "photos", item.data().photoId as string));
           return photoSnapshot.exists() && photoSnapshot.data().visibility === "public"
             ? { id: photoSnapshot.id, ...photoSnapshot.data() } as PhotoPost
             : null;

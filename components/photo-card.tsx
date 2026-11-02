@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { addDoc, collection, deleteDoc, doc, getDoc, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Bookmark, Heart, MessageCircle, MoreHorizontal, Share2, Star } from "lucide-react";
 import { firestore } from "@/lib/firebase";
 import { notifyUser } from "@/lib/notifications";
@@ -26,13 +26,15 @@ export function PhotoCard({ photo }: { photo: PhotoPost }) {
 
   useEffect(() => {
     if (!firestore) return;
-    const unsubLikes = onSnapshot(collection(firestore, "photos", photo.id, "likes"), snap => setLikeCount(snap.size));
-    const unsubRatings = onSnapshot(collection(firestore, "photos", photo.id, "ratings"), snap => { setRatingCount(snap.size); setRatingAverage(snap.size ? snap.docs.reduce((total, item) => total + Number(item.data().value || 0), 0) / snap.size : 0); });
-    const unsubViews = onSnapshot(collection(firestore, "photos", photo.id, "views"), snap => setViewCount(snap.size));
+    const handleListenerError = () => setError("Some photo details couldn't load. Check Firestore access and try again.");
+    const unsubLikes = onSnapshot(collection(firestore, "photos", photo.id, "likes"), snap => setLikeCount(snap.size), handleListenerError);
+    const unsubRatings = onSnapshot(collection(firestore, "photos", photo.id, "ratings"), snap => { setRatingCount(snap.size); setRatingAverage(snap.size ? snap.docs.reduce((total, item) => total + Number(item.data().value || 0), 0) / snap.size : 0); }, handleListenerError);
+    const unsubViews = onSnapshot(collection(firestore, "photos", photo.id, "views"), snap => setViewCount(snap.size), handleListenerError);
     if (!user) return () => { unsubLikes(); unsubRatings(); unsubViews(); };
-    const unsubLike = onSnapshot(doc(firestore, "photos", photo.id, "likes", user.uid), snap => setLiked(snap.exists()));
-    const unsubSave = onSnapshot(doc(firestore, "savedPhotos", `${user.uid}_${photo.id}`), snap => setSaved(snap.exists()));
-    const unsubRating = onSnapshot(doc(firestore, "photos", photo.id, "ratings", user.uid), snap => setMyRating((snap.data()?.value as number) || 0));
+    const unsubLike = onSnapshot(doc(firestore, "photos", photo.id, "likes", user.uid), snap => setLiked(snap.exists()), handleListenerError);
+    const savedPhotoQuery = query(collection(firestore, "savedPhotos"), where("userId", "==", user.uid), where("photoId", "==", photo.id), limit(1));
+    const unsubSave = onSnapshot(savedPhotoQuery, snap => setSaved(!snap.empty), handleListenerError);
+    const unsubRating = onSnapshot(doc(firestore, "photos", photo.id, "ratings", user.uid), snap => setMyRating((snap.data()?.value as number) || 0), handleListenerError);
     return () => { unsubLikes(); unsubRatings(); unsubViews(); unsubLike(); unsubSave(); unsubRating(); };
   }, [photo.id, user]);
 
@@ -57,7 +59,7 @@ export function PhotoCard({ photo }: { photo: PhotoPost }) {
 
   useEffect(() => {
     if (!commentsOpen || !firestore) return;
-    return onSnapshot(query(collection(firestore, "photos", photo.id, "comments"), orderBy("createdAt", "desc"), limit(40)), snap => setComments(snap.docs.map(item => ({ id: item.id, ...item.data() } as CommentItem))));
+    return onSnapshot(query(collection(firestore, "photos", photo.id, "comments"), orderBy("createdAt", "desc"), limit(40)), snap => setComments(snap.docs.map(item => ({ id: item.id, ...item.data() } as CommentItem))), () => setError("Comments couldn't load. Check Firestore access and try again."));
   }, [commentsOpen, photo.id]);
 
   async function toggleLike() {

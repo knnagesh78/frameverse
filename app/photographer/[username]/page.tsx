@@ -34,9 +34,9 @@ export default function PhotographerProfilePage() {
         if (canceled || !person.exists()) { if (!canceled) { setError("This photographer profile could not be found."); setLoading(false); } return; }
         const data = { uid, ...person.data() } as Profile; setProfile(data);
         stopPhotos = onSnapshot(query(collection(firestore!, "photos"), where("ownerId", "==", uid), where("visibility", "==", "public"), orderBy("createdAt", "desc"), limit(60)), snap => { setPhotos(snap.docs.map(item => ({ id: item.id, ...item.data() } as PhotoPost))); setLoading(false); }, () => { setError("The portfolio couldn't load. Check Firestore access."); setLoading(false); });
-        stopFollowers = onSnapshot(query(collection(firestore!, "follows"), where("followingId", "==", uid)), snap => setFollowerCount(snap.size));
-        stopFollowing = onSnapshot(query(collection(firestore!, "follows"), where("followerId", "==", uid)), snap => setFollowingCount(snap.size));
-        if (user && user.uid !== uid) stopRelationship = onSnapshot(doc(firestore!, "follows", `${user.uid}_${uid}`), snap => setIsFollowing(snap.exists()));
+        stopFollowers = onSnapshot(query(collection(firestore!, "follows"), where("followingId", "==", uid)), snap => setFollowerCount(snap.size), () => setError("Follower counts couldn't load. Check Firestore access."));
+        stopFollowing = onSnapshot(query(collection(firestore!, "follows"), where("followerId", "==", uid)), snap => setFollowingCount(snap.size), () => setError("Following counts couldn't load. Check Firestore access."));
+        if (user && user.uid !== uid) stopRelationship = onSnapshot(doc(firestore!, "follows", `${user.uid}_${uid}`), snap => setIsFollowing(snap.exists()), () => setError("Your follow status couldn't load. Check Firestore access."));
       } catch { if (!canceled) { setError("This photographer profile couldn't be opened."); setLoading(false); } }
     }
     void load();
